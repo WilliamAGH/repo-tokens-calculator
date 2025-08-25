@@ -1,7 +1,7 @@
 [project]
-name = "repo-tokens"
+name = "repo-tokens-calculator"
 version = "0.1.0"
-description = "Add your description here"
+description = "CLI token counter for files and directories using tiktoken (uv-managed)"
 requires-python = ">=3.12"
 dependencies = [
     "tiktoken>=0.11.0",
