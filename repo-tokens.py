@@ -23,6 +23,7 @@ Notes:
 - Default model: gpt-4o (uses o200k_base). You can override with --model; for non-OpenAI models
   we approximate using a close tiktoken base (see README for details).
 - If an unknown model is provided, we fallback to cl100k_base.
+- Pretty output: pass --pretty for a colorful, human-friendly summary (no extra deps).
 """
 import os
 import sys
@@ -131,23 +132,30 @@ def get_tracked_files(repo_path):
     return files
 
 def count_tokens_in_file(filepath, encoder, max_size=1048576):  # 1MB limit for speed
-    """Count tokens in a single file"""
+    """Count tokens in a single file.
+
+    Returns (tokens, skipped_reason) where skipped_reason is one of:
+      - 'large' (file exceeded max_size)
+      - 'empty' (file empty or unreadable content)
+      - 'error' (exception occurred)
+      - None (count is valid)
+    """
     try:
         # Check file size first for speed
         file_size = os.path.getsize(filepath)
         if file_size > max_size:
-            return 0
+            return 0, 'large'
         if file_size == 0:
-            return 0
+            return 0, 'empty'
 
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read(max_size)
             if not content:
-                return 0
+                return 0, 'empty'
             tokens = encoder.encode(content)
-            return len(tokens)
+            return len(tokens), None
     except Exception:
-        return 0
+        return 0, 'error'
 
 def format_tokens(count):
     """Format token count for display"""
@@ -222,32 +230,52 @@ def count_repo_tokens(repo_path='.', model='gpt-4o', use_cache=True):
     if use_cache:
         cached = get_cache(repo_path_str)
         if cached:
-            return cached
+            # Mark as cached without mutating stored cache on disk
+            cached_result = dict(cached)
+            cached_result.setdefault('cached', True)
+            return cached_result
 
     encoder = get_encoder(model)
+    encoder_name = getattr(encoder, 'name', 'unknown')
 
     total_tokens = 0
     file_count = 0
+    skipped = {'large': 0, 'empty': 0, 'error': 0}
+    ext_totals = {}
 
     if path_obj.is_file():
-        tokens = count_tokens_in_file(str(path_obj), encoder)
-        total_tokens = max(tokens, 0)
-        file_count = 1 if tokens > 0 else 0
+        tokens, reason = count_tokens_in_file(str(path_obj), encoder)
+        if reason:
+            skipped[reason] = skipped.get(reason, 0) + 1
+        if tokens > 0:
+            total_tokens += tokens
+            file_count += 1
+            ext = path_obj.suffix.lower() or 'unknown'
+            ext_totals[ext] = ext_totals.get(ext, 0) + tokens
     else:
         files = get_tracked_files(repo_path_str)
         # Process files
         for file_path in files:
             full_path = Path(repo_path_str) / file_path
             if full_path.is_file():
-                tokens = count_tokens_in_file(str(full_path), encoder)
+                tokens, reason = count_tokens_in_file(str(full_path), encoder)
+                if reason:
+                    skipped[reason] = skipped.get(reason, 0) + 1
                 if tokens > 0:
                     total_tokens += tokens
                     file_count += 1
+                    ext = full_path.suffix.lower() or 'unknown'
+                    ext_totals[ext] = ext_totals.get(ext, 0) + tokens
 
     result = {
         'total_tokens': total_tokens,
         'file_count': file_count,
-        'formatted': format_tokens(total_tokens)
+        'formatted': format_tokens(total_tokens),
+        'skipped': skipped,
+        'ext_totals': ext_totals,
+        'encoder': encoder_name,
+        'model': model,
+        'cached': False,
     }
 
     # Save to cache
@@ -262,6 +290,7 @@ def main():
     parser.add_argument('--simple', action='store_true', help='Simple output (just token count)')
     parser.add_argument('--model', default='gpt-4o', help='Tokenizer selection (default: gpt-4o)')
     parser.add_argument('--status-line', action='store_true', help='Output formatted for status line')
+    parser.add_argument('--pretty', action='store_true', help='Colorful human-readable summary output')
 
     args = parser.parse_args()
 
@@ -276,6 +305,54 @@ def main():
     elif args.status_line:
         # Format for status line: "📊 507k tokens"
         print(f"📊 {result['formatted']} tokens")
+    elif args.pretty:
+        def supports_color() -> bool:
+            return sys.stdout.isatty() and os.getenv('NO_COLOR') is None
+        # ANSI colors
+        RESET = "\033[0m" if supports_color() else ""
+        BOLD = "\033[1m" if supports_color() else ""
+        CYAN = "\033[36m" if supports_color() else ""
+        GREEN = "\033[32m" if supports_color() else ""
+        MAGENTA = "\033[35m" if supports_color() else ""
+        YELLOW = "\033[33m" if supports_color() else ""
+        BLUE = "\033[34m" if supports_color() else ""
+
+        target_name = os.path.basename(os.path.abspath(args.path))
+        skipped = result.get('skipped', {})
+        skipped_str = []
+        if skipped.get('large', 0):
+            skipped_str.append(f"{skipped['large']} large")
+        if skipped.get('empty', 0):
+            skipped_str.append(f"{skipped['empty']} empty")
+        if skipped.get('error', 0):
+            skipped_str.append(f"{skipped['error']} error")
+        skipped_out = ", ".join(skipped_str) if skipped_str else "0"
+
+        encoder = result.get('encoder', 'unknown')
+        model = result.get('model', args.model)
+        avg_per_file = (result['total_tokens'] // result['file_count']) if result['file_count'] else 0
+
+        # Header
+        print(f"{CYAN}┌───────────────────────────────────────────────────────┐{RESET}")
+        print(f"{CYAN}│{RESET} {BOLD}Repo Tokens Summary{RESET}                                      {CYAN}│{RESET}")
+        print(f"{CYAN}├───────────────────────────────────────────────────────┤{RESET}")
+        # Body
+        print(f"{CYAN}│{RESET} 📁 {BOLD}{target_name}{RESET}")
+        print(f"{CYAN}│{RESET} 🧠 Model: {MAGENTA}{model}{RESET}  {BLUE}[{encoder}]{RESET}")
+        print(f"{CYAN}│{RESET} 🗂️  Files counted: {GREEN}{result['file_count']:,}{RESET}  •  Skipped: {YELLOW}{skipped_out}{RESET}")
+        print(f"{CYAN}│{RESET} 🔢 Tokens: {BOLD}{result['total_tokens']:,}{RESET}  ({GREEN}{result['formatted']}{RESET})  •  Avg/file: {avg_per_file:,}")
+        # Optional: top 3 extensions by tokens
+        ext_totals = result.get('ext_totals', {})
+        if ext_totals:
+            top = sorted(ext_totals.items(), key=lambda x: x[1], reverse=True)[:3]
+            top_str = ", ".join(f"{ext}: {format_tokens(tok)}" for ext, tok in top)
+            print(f"{CYAN}│{RESET} 🔎 Top types: {top_str}")
+        # Footer
+        cached = result.get('cached', False)
+        cache_text = f"cache={'hit' if cached else 'miss'}"
+        print(f"{CYAN}├───────────────────────────────────────────────────────┤{RESET}")
+        print(f"{CYAN}│{RESET} {cache_text}")
+        print(f"{CYAN}└───────────────────────────────────────────────────────┘{RESET}")
     else:
         target_name = os.path.basename(os.path.abspath(args.path))
         print(f"Target: {target_name}")
