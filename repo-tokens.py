@@ -328,16 +328,19 @@ def main():
             return ANSI_RE.sub("", s)
 
         def disp_width(s: str) -> int:
-            # Compute display width: treat wide chars (W/F) as 2, combining and VS16/ZWJ as 0
+            # Compute display width: treat wide chars (W/F) as 2
+            # Treat zero-width/control/format/combining marks as 0
             w = 0
             for ch in s:
                 # Skip ANSI in advance; callers pass stripped if needed
                 if ch == "\x1b":
-                    # shouldn't occur if stripped; safeguard
                     continue
-                if ch in ("\u200d",):  # ZWJ
+                cat = ud.category(ch)
+                # Zero-width or formatting categories
+                if cat in ("Mn", "Me", "Cf", "Cc"):
                     continue
-                if ud.combining(ch):
+                # Explicitly skip common zero-width joiners/spaces as well
+                if ch in ("\u200d", "\u200b", "\ufeff"):
                     continue
                 eaw = ud.east_asian_width(ch)
                 w += 2 if eaw in ("W", "F") else 1
