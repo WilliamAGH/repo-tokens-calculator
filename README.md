@@ -116,3 +116,7 @@ Notes:
 ## License
 
 MIT © 2025 William Callahan
+
+## About the author
+
+Built by [William Callahan](https://williamcallahan.com). See my other projects on my site. Issues and PRs are welcome!
