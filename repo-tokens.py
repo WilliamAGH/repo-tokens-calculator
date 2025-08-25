@@ -306,8 +306,12 @@ def main():
         # Format for status line: "📊 507k tokens"
         print(f"📊 {result['formatted']} tokens")
     elif args.pretty:
+        import re
+        import unicodedata as ud
+
         def supports_color() -> bool:
             return sys.stdout.isatty() and os.getenv('NO_COLOR') is None
+
         # ANSI colors
         RESET = "\033[0m" if supports_color() else ""
         BOLD = "\033[1m" if supports_color() else ""
@@ -317,6 +321,50 @@ def main():
         YELLOW = "\033[33m" if supports_color() else ""
         BLUE = "\033[34m" if supports_color() else ""
 
+        # Helpers to handle width with ANSI and wide chars
+        ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+        def strip_ansi(s: str) -> str:
+            return ANSI_RE.sub("", s)
+
+        def disp_width(s: str) -> int:
+            # Compute display width: treat wide chars (W/F) as 2, combining and VS16/ZWJ as 0
+            w = 0
+            for ch in s:
+                # Skip ANSI in advance; callers pass stripped if needed
+                if ch == "\x1b":
+                    # shouldn't occur if stripped; safeguard
+                    continue
+                if ch in ("\u200d",):  # ZWJ
+                    continue
+                if ud.combining(ch):
+                    continue
+                eaw = ud.east_asian_width(ch)
+                w += 2 if eaw in ("W", "F") else 1
+            return w
+
+        def make_box(lines: list[str]) -> str:
+            # Compute content width from visible (no ANSI) width
+            content_width = max((disp_width(strip_ansi(ln)) for ln in lines), default=0)
+            horiz = "─" * (content_width + 2)  # 1 space padding on each side
+            top = f"{CYAN}┌{horiz}┐{RESET}"
+            sep = f"{CYAN}├{horiz}┤{RESET}"
+            bot = f"{CYAN}└{horiz}┘{RESET}"
+            out_lines = [top]
+            for ln in lines:
+                raw = strip_ansi(ln)
+                pad = content_width - disp_width(raw)
+                out_lines.append(f"{CYAN}│{RESET} {ln}{' ' * pad} {CYAN}│{RESET}")
+            out_lines.append(sep)
+            # Footer line (cache)
+            cached = result.get('cached', False)
+            cache_text = f"cache={'hit' if cached else 'miss'}"
+            pad = content_width - disp_width(cache_text)
+            out_lines.append(f"{CYAN}│{RESET} {cache_text}{' ' * pad} {CYAN}│{RESET}")
+            out_lines.append(bot)
+            return "\n".join(out_lines)
+
+        # Build content lines
         target_name = os.path.basename(os.path.abspath(args.path))
         skipped = result.get('skipped', {})
         skipped_str = []
@@ -332,27 +380,20 @@ def main():
         model = result.get('model', args.model)
         avg_per_file = (result['total_tokens'] // result['file_count']) if result['file_count'] else 0
 
-        # Header
-        print(f"{CYAN}┌───────────────────────────────────────────────────────┐{RESET}")
-        print(f"{CYAN}│{RESET} {BOLD}Repo Tokens Summary{RESET}                                      {CYAN}│{RESET}")
-        print(f"{CYAN}├───────────────────────────────────────────────────────┤{RESET}")
-        # Body
-        print(f"{CYAN}│{RESET} 📁 {BOLD}{target_name}{RESET}")
-        print(f"{CYAN}│{RESET} 🧠 Model: {MAGENTA}{model}{RESET}  {BLUE}[{encoder}]{RESET}")
-        print(f"{CYAN}│{RESET} 🗂️  Files counted: {GREEN}{result['file_count']:,}{RESET}  •  Skipped: {YELLOW}{skipped_out}{RESET}")
-        print(f"{CYAN}│{RESET} 🔢 Tokens: {BOLD}{result['total_tokens']:,}{RESET}  ({GREEN}{result['formatted']}{RESET})  •  Avg/file: {avg_per_file:,}")
+        lines = []
+        lines.append(f"{BOLD}Repo Tokens Summary{RESET}")
+        lines.append(f"📁 {BOLD}{target_name}{RESET}")
+        lines.append(f"🧠 Model: {MAGENTA}{model}{RESET}  {BLUE}[{encoder}]{RESET}")
+        lines.append(f"🗂️  Files counted: {GREEN}{result['file_count']:,}{RESET}  •  Skipped: {YELLOW}{skipped_out}{RESET}")
+        lines.append(f"🔢 Tokens: {BOLD}{result['total_tokens']:,}{RESET}  ({GREEN}{result['formatted']}{RESET})  •  Avg/file: {avg_per_file:,}")
         # Optional: top 3 extensions by tokens
         ext_totals = result.get('ext_totals', {})
         if ext_totals:
             top = sorted(ext_totals.items(), key=lambda x: x[1], reverse=True)[:3]
             top_str = ", ".join(f"{ext}: {format_tokens(tok)}" for ext, tok in top)
-            print(f"{CYAN}│{RESET} 🔎 Top types: {top_str}")
-        # Footer
-        cached = result.get('cached', False)
-        cache_text = f"cache={'hit' if cached else 'miss'}"
-        print(f"{CYAN}├───────────────────────────────────────────────────────┤{RESET}")
-        print(f"{CYAN}│{RESET} {cache_text}")
-        print(f"{CYAN}└───────────────────────────────────────────────────────┘{RESET}")
+            lines.append(f"🔎 Top types: {top_str}")
+
+        print(make_box(lines))
     else:
         target_name = os.path.basename(os.path.abspath(args.path))
         print(f"Target: {target_name}")
