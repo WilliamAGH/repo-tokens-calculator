@@ -63,6 +63,11 @@ uv run -- python repo-tokens.py . --model claude-4-sonnet --simple
 uv run -- python repo-tokens.py . --model gemini-2.5-pro --simple
 ```
 
+- Pretty summary output (colorful, no extra deps):
+```bash
+uv run -- python repo-tokens.py . --pretty
+```
+
 - Status line style output:
 ```bash
 uv run -- python repo-tokens.py . --status-line
