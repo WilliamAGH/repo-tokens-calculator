@@ -20,7 +20,9 @@ Recommended invocation with uv (isolated env):
 Notes:
 - If a FILE is provided, only that file is tokenized.
 - If a DIRECTORY is provided, all matching files in all subdirectories are included.
-- Model selection: --model gpt-4|gpt-4o|... (falls back to cl100k_base if unknown)
+- Default model: gpt-4o (uses o200k_base). You can override with --model; for non-OpenAI models
+  we approximate using a close tiktoken base (see README for details).
+- If an unknown model is provided, we fallback to cl100k_base.
 """
 import os
 import sys
@@ -42,14 +44,40 @@ _encoder_cache = {}
 # Cache file for results
 CACHE_FILE = os.path.expanduser("~/.cache/repo-tokens-cache.json")
 
-def get_encoder(model='gpt-4'):
-    """Get cached encoder for model"""
-    if model not in _encoder_cache:
+def get_encoder(model='gpt-4o'):
+    """Get cached encoder for model.
+
+    Strategy:
+      1) Try tiktoken.encoding_for_model(model)
+      2) If unknown, map common aliases to a base encoding
+      3) Fallback to cl100k_base
+    """
+    key = (model or "").lower()
+    if key not in _encoder_cache:
+        # Known aliases for non-OpenAI models (approximate)
+        alias_to_base = {
+            # OpenAI
+            'gpt-4o': 'o200k_base',
+            'gpt-4o-mini': 'o200k_base',
+            'gpt-4': 'cl100k_base',
+            'gpt-3.5-turbo': 'cl100k_base',
+            # Anthropic (approximate using cl100k_base)
+            'claude-4-sonnet': 'cl100k_base',
+            'claude-3.5-sonnet': 'cl100k_base',
+            'anthropic-claude-4-sonnet': 'cl100k_base',
+            # Google Gemini (approximate using cl100k_base)
+            'gemini-2.5-pro': 'cl100k_base',
+            'gemini-1.5-pro': 'cl100k_base',
+        }
         try:
-            _encoder_cache[model] = tiktoken.encoding_for_model(model)
+            _encoder_cache[key] = tiktoken.encoding_for_model(key)
         except KeyError:
-            _encoder_cache[model] = tiktoken.get_encoding("cl100k_base")
-    return _encoder_cache[model]
+            base = alias_to_base.get(key)
+            if base:
+                _encoder_cache[key] = tiktoken.get_encoding(base)
+            else:
+                _encoder_cache[key] = tiktoken.get_encoding("cl100k_base")
+    return _encoder_cache[key]
 
 def get_tracked_files(repo_path):
     """Get list of files for token counting, filtered by extension.
@@ -181,7 +209,7 @@ def save_cache(repo_path, result):
     except Exception:
         pass
 
-def count_repo_tokens(repo_path='.', model='gpt-4', use_cache=True):
+def count_repo_tokens(repo_path='.', model='gpt-4o', use_cache=True):
     """Count tokens in a repository (recursive) or a single file.
 
     - If repo_path is a file: count tokens only in that file
@@ -232,7 +260,7 @@ def main():
     parser = argparse.ArgumentParser(description='Count tokens in a repository or a file')
     parser.add_argument('path', nargs='?', default='.', help='Path to a directory (recursive) or a single file')
     parser.add_argument('--simple', action='store_true', help='Simple output (just token count)')
-    parser.add_argument('--model', default='gpt-4', help='Model for tokenization (default: gpt-4)')
+    parser.add_argument('--model', default='gpt-4o', help='Tokenizer selection (default: gpt-4o)')
     parser.add_argument('--status-line', action='store_true', help='Output formatted for status line')
 
     args = parser.parse_args()
