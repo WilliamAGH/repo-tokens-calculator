@@ -1,5 +1,9 @@
 # repo-tokens-calculator
 
+<p align="center">
+  <img src="./repo-tokens-calculator.png" alt="repo-tokens-calculator pretty output" />
+</p>
+
 Fast, reliable token counts for files or entire directories (recursive, n-deep) using OpenAI's tiktoken. Runs in a fully isolated environment with uv.
 
 ## At a glance
